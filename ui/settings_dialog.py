@@ -2,6 +2,8 @@
 Dialog Impostazioni - Configurazione completa applicazione
 """
 
+import asyncio
+
 from PySide6.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QTabWidget,
     QWidget, QFormLayout, QComboBox, QSpinBox,
@@ -14,6 +16,15 @@ from typing import Dict, Any
 
 from loguru import logger
 from config.settings import settings
+
+_STT_ENGINE_FOR_MODEL = {
+    "whisper-base-it": "whisper_local",
+    "whisper-small-it": "whisper_local",
+    "vosk-model-it-0.22": "vosk",
+}
+_TTS_ENGINE_FOR_MODEL = {
+    "piper-it-voice1": "piper",
+}
 
 
 class SettingsDialog(QDialog):
@@ -247,53 +258,201 @@ class SettingsDialog(QDialog):
         """Crea tab configurazione voce"""
         widget = QWidget()
         layout = QVBoxLayout()
-        
+
         # STT
-        stt_group = QGroupBox("Speech to Text")
+        stt_group = QGroupBox("🎙 Speech to Text (Locale)")
         stt_layout = QVBoxLayout()
-        
-        self.stt_combo = QComboBox()
-        self.stt_combo.addItems(["disabled", "whisper_local", "whisper_api", "vosk"])
-        stt_layout.addWidget(QLabel("Provider STT:"))
-        stt_layout.addWidget(self.stt_combo)
-        
+
+        stt_desc = QLabel("Riconoscimento vocale per la trascrizione dei comandi vocali dell'utente.")
+        stt_desc.setWordWrap(True)
+        stt_desc.setStyleSheet("color: gray; font-size: 11px;")
+        stt_layout.addWidget(stt_desc)
+
+        self.stt_enabled_cb = QCheckBox("Abilita STT")
+        self.stt_enabled_cb.setChecked(True)
+        self.stt_enabled_cb.stateChanged.connect(self._on_stt_enabled_changed)
+        stt_layout.addWidget(self.stt_enabled_cb)
+
+        stt_layout.addWidget(QLabel("Modello STT"))
+        self.stt_model_combo = QComboBox()
+        self.stt_model_combo.addItems([
+            "whisper-base-it",
+            "whisper-small-it",
+            "vosk-model-it-0.22"
+        ])
+        self.stt_model_combo.currentTextChanged.connect(self._update_stt_status)
+        stt_layout.addWidget(self.stt_model_combo)
+
+        self.stt_status_label = QLabel("Nessun modello installato")
+        self.stt_status_label.setStyleSheet("color: gray; font-size: 11px;")
+        stt_layout.addWidget(self.stt_status_label)
+
+        self.stt_download_btn = QPushButton("⬇ Scarica modello STT")
+        self.stt_download_btn.clicked.connect(self._download_stt_model)
+        stt_layout.addWidget(self.stt_download_btn)
+
         stt_group.setLayout(stt_layout)
         layout.addWidget(stt_group)
-        
+
         # TTS
-        tts_group = QGroupBox("Text to Speech")
+        tts_group = QGroupBox("🔊 Text to Speech (Locale)")
         tts_layout = QVBoxLayout()
-        
-        self.tts_combo = QComboBox()
-        self.tts_combo.addItems(["disabled", "piper", "xtts", "coqui", "elevenlabs"])
-        tts_layout.addWidget(QLabel("Provider TTS:"))
-        tts_layout.addWidget(self.tts_combo)
-        
-        self.elevenlabs_key = QLineEdit()
-        self.elevenlabs_key.setEchoMode(QLineEdit.Password)
-        self.elevenlabs_key.setPlaceholderText("ElevenLabs API Key")
-        tts_layout.addWidget(self.elevenlabs_key)
-        
+
+        tts_desc = QLabel("Sintesi vocale per la risposta dell'assistente.")
+        tts_desc.setWordWrap(True)
+        tts_desc.setStyleSheet("color: gray; font-size: 11px;")
+        tts_layout.addWidget(tts_desc)
+
+        self.tts_enabled_cb = QCheckBox("Abilita TTS")
+        self.tts_enabled_cb.setChecked(True)
+        self.tts_enabled_cb.stateChanged.connect(self._on_tts_enabled_changed)
+        tts_layout.addWidget(self.tts_enabled_cb)
+
+        tts_layout.addWidget(QLabel("Modello TTS"))
+        self.tts_model_combo = QComboBox()
+        self.tts_model_combo.addItems([
+            "piper-it-voice1"
+        ])
+        self.tts_model_combo.currentTextChanged.connect(self._update_tts_status)
+        tts_layout.addWidget(self.tts_model_combo)
+
+        self.tts_status_label = QLabel("Nessun modello installato")
+        self.tts_status_label.setStyleSheet("color: gray; font-size: 11px;")
+        tts_layout.addWidget(self.tts_status_label)
+
+        self.tts_download_btn = QPushButton("⬇ Scarica modello TTS")
+        self.tts_download_btn.clicked.connect(self._download_tts_model)
+        tts_layout.addWidget(self.tts_download_btn)
+
         tts_group.setLayout(tts_layout)
         layout.addWidget(tts_group)
-        
-        # Modelli installati
-        models_group = QGroupBox("Modelli Locali")
-        models_layout = QVBoxLayout()
-        
-        self.models_list = QLabel("Nessun modello installato")
-        models_layout.addWidget(self.models_list)
-        
-        download_btn = QPushButton("📥 Scarica Modelli")
-        download_btn.clicked.connect(self._download_models)
-        models_layout.addWidget(download_btn)
-        
-        models_group.setLayout(models_layout)
-        layout.addWidget(models_group)
-        
+
         layout.addStretch()
         widget.setLayout(layout)
+
+        # Stato iniziale coerente con checkbox e combo già popolate
+        self._on_stt_enabled_changed(self.stt_enabled_cb.checkState())
+        self._on_tts_enabled_changed(self.tts_enabled_cb.checkState())
+        self._update_stt_status(self.stt_model_combo.currentText())
+        self._update_tts_status(self.tts_model_combo.currentText())
+
         return widget
+
+    def _on_stt_enabled_changed(self, state):
+        enabled = bool(state)
+        self.stt_model_combo.setEnabled(enabled)
+        self.stt_download_btn.setEnabled(enabled)
+
+    def _on_tts_enabled_changed(self, state):
+        enabled = bool(state)
+        self.tts_model_combo.setEnabled(enabled)
+        self.tts_download_btn.setEnabled(enabled)
+    
+    def _model_info(self, model_name: str, provider_type: str):
+        """Recupera le info aggiornate di un modello dal catalogo"""
+        for m in self.container.voice_model_manager.get_available_models():
+            if m.name == model_name and m.provider == provider_type:
+                return m
+        return None
+
+    def _update_stt_status(self, model_name: str):
+        if not model_name:
+            return
+        info = self._model_info(model_name, "stt")
+        if info and info.installed:
+            self.stt_status_label.setText(f"✅ Modello installato ({info.size_mb:.0f} MB)")
+            self.stt_download_btn.setText("⬇ Ri-scarica modello STT")
+        elif info:
+            self.stt_status_label.setText(f"Non installato · {info.size_mb:.0f} MB da scaricare")
+            self.stt_download_btn.setText("⬇ Scarica modello STT")
+        else:
+            self.stt_status_label.setText("Nessun modello installato")
+ 
+    def _update_tts_status(self, model_name: str):
+        if not model_name:
+            return
+        info = self._model_info(model_name, "tts")
+        if info and info.installed:
+            self.tts_status_label.setText(f"✅ Modello installato ({info.size_mb:.0f} MB)")
+            self.tts_download_btn.setText("⬇ Ri-scarica modello TTS")
+        elif info:
+            self.tts_status_label.setText(f"Non installato · {info.size_mb:.0f} MB da scaricare")
+            self.tts_download_btn.setText("⬇ Scarica modello TTS")
+        else:
+            self.tts_status_label.setText("Nessun modello installato")
+ 
+    def _download_stt_model(self):
+        model_name = self.stt_model_combo.currentText()
+        reply = QMessageBox.question(
+            self, "Scarica modello STT",
+            f"Scaricare il modello '{model_name}'?",
+            QMessageBox.Yes | QMessageBox.No
+        )
+        if reply != QMessageBox.Yes:
+            return
+ 
+        self.stt_download_btn.setEnabled(False)
+        self.stt_status_label.setText("Download in corso...")
+        self._start_download("stt", model_name)
+ 
+    def _download_tts_model(self):
+        model_name = self.tts_model_combo.currentText()
+        reply = QMessageBox.question(
+            self, "Scarica modello TTS",
+            f"Scaricare il modello '{model_name}'?",
+            QMessageBox.Yes | QMessageBox.No
+        )
+        if reply != QMessageBox.Yes:
+            return
+ 
+        self.tts_download_btn.setEnabled(False)
+        self.tts_status_label.setText("Download in corso...")
+        self._start_download("tts", model_name)
+
+    def _start_download(self, kind: str, model_name: str):
+        """Avvia il download (bloccante) in un QThread separato per non congelare la UI."""
+        from PySide6.QtCore import QThread, Signal, QObject
+
+        class _Worker(QObject):
+            finished = Signal(str, str, bool)
+
+            def __init__(self, manager, kind, model_name):
+                super().__init__()
+                self.manager = manager
+                self.kind = kind
+                self.model_name = model_name
+
+            def run(self):
+                success = self.manager.download_model(self.model_name)
+                self.finished.emit(self.kind, self.model_name, success)
+
+        if not hasattr(self, "_download_threads"):
+            self._download_threads = []
+
+        thread = QThread(self)
+        worker = _Worker(self.container.voice_model_manager, kind, model_name)
+        worker.moveToThread(thread)
+        thread.started.connect(worker.run)
+        worker.finished.connect(self._on_download_finished)
+        worker.finished.connect(thread.quit)
+        worker.finished.connect(worker.deleteLater)
+        thread.finished.connect(thread.deleteLater)
+
+        self._download_threads.append((thread, worker))
+        thread.start()
+
+    def _on_download_finished(self, kind: str, model_name: str, success: bool):
+        if kind == "stt":
+            self.stt_download_btn.setEnabled(self.stt_enabled_cb.isChecked())
+            self._update_stt_status(model_name)
+        else:
+            self.tts_download_btn.setEnabled(self.tts_enabled_cb.isChecked())
+            self._update_tts_status(model_name)
+
+        if success:
+            QMessageBox.information(self, "Download completato", f"Modello '{model_name}' scaricato con successo.")
+        else:
+            QMessageBox.critical(self, "Download fallito", f"Impossibile scaricare il modello '{model_name}'. Controlla i log.")
     
     def _create_monitoring_tab(self) -> QWidget:
         """Crea tab configurazione monitoraggio"""
@@ -439,8 +598,17 @@ class SettingsDialog(QDialog):
         self.market_provider_combo.setCurrentText(self.settings.market_data_provider)
         
         # Voice
-        self.stt_combo.setCurrentText(self.settings.stt_provider)
-        self.tts_combo.setCurrentText(self.settings.tts_provider)
+        self.stt_enabled_cb.setChecked(self.settings.stt_enabled)
+        self.tts_enabled_cb.setChecked(self.settings.tts_enabled)
+        stt_idx = self.stt_model_combo.findText(self.settings.stt_model_name)
+        if stt_idx >= 0:
+            self.stt_model_combo.setCurrentIndex(stt_idx)
+        tts_idx = self.tts_model_combo.findText(self.settings.tts_model_name)
+        if tts_idx >= 0:
+            self.tts_model_combo.setCurrentIndex(tts_idx)
+        # Forza l'aggiornamento degli status label anche se l'indice non cambia
+        self._update_stt_status(self.stt_model_combo.currentText())
+        self._update_tts_status(self.tts_model_combo.currentText())
         
         # UI
         self.theme_combo.setCurrentText(self.settings.theme)
@@ -463,12 +631,25 @@ class SettingsDialog(QDialog):
             self.settings.market_data_provider = self.market_provider_combo.currentText()
             
             # Voice
-            self.settings.stt_provider = self.stt_combo.currentText()
-            self.settings.tts_provider = self.tts_combo.currentText()
+            self.settings.stt_enabled = self.stt_enabled_cb.isChecked()
+            self.settings.tts_enabled = self.tts_enabled_cb.isChecked()
+            self.settings.stt_model_name = self.stt_model_combo.currentText()
+            self.settings.tts_model_name = self.tts_model_combo.currentText()
+            self.settings.stt_provider = (
+                _STT_ENGINE_FOR_MODEL.get(self.settings.stt_model_name, "disabled")
+                if self.settings.stt_enabled else "disabled"
+            )
+            self.settings.tts_provider = (
+                _TTS_ENGINE_FOR_MODEL.get(self.settings.tts_model_name, "disabled")
+                if self.settings.tts_enabled else "disabled"
+            )
             
             # UI
             self.settings.theme = self.theme_combo.currentText()
             self.settings.log_level = self.log_level_combo.currentText()
+
+            # LANGUAGE
+            self.settings.language = self.language_combo.currentText()
             
             # Notifiche
             self.settings.popup_enabled = self.popup_cb.isChecked()
@@ -517,16 +698,3 @@ class SettingsDialog(QDialog):
         
         self.ai_model_combo.clear()
         self.ai_model_combo.addItems(models.get(provider, []))
-    
-    def _download_models(self):
-        """Scarica modelli locali"""
-        QMessageBox.information(
-            self,
-            "Download Modelli",
-            "Il download dei modelli verrà implementato nella prossima versione.\n"
-            "I modelli disponibili sono:\n"
-            "- Whisper (STT)\n"
-            "- Piper (TTS)\n"
-            "- XTTS (TTS)\n"
-            "- Vosk (STT)"
-        )

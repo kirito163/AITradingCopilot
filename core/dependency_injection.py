@@ -12,8 +12,8 @@ from config.settings import settings
 from database.connection import DatabaseManager
 from ai.providers.openai_provider import OpenAIProvider
 from ai.providers.anthropic_provider import AnthropicProvider
-from ai.providers.gemini_provider import GeminiProvider
-from ai.providers.openrouter_provider import OpenRouterProvider
+#from ai.providers.gemini_provider import GeminiProvider #TOGLIERE COMMENTO UNA VOTLA IMPLEMENTATO IL MODULO
+#from ai.providers.openrouter_provider import OpenRouterProvider #TOGLIERE COMMENTO UNA VOTLA IMPLEMENTATO IL MODULO
 from ai.providers.ollama_provider import OllamaProvider
 from ai.base import AbstractAIProvider
 from portfolio.portfolio_manager import PortfolioManager
@@ -22,7 +22,20 @@ from market.providers.yahoo_finance import YahooFinanceProvider
 from market.base import AbstractMarketData
 from voice.stt_base import AbstractSTT
 from voice.tts_base import AbstractTTS
+from voice.stt_providers.whisper_local import WhisperLocalSTT
+from voice.stt_providers.vosk import VoskSTT
+from voice.tts_providers.piper import PiperTTS
+from voice.model_manager import VoiceModelManager
 
+# Modello di catalogo -> motore che sa caricarlo
+_STT_MODEL_ENGINE = {
+    "whisper-base-it": "whisper_local",
+    "whisper-small-it": "whisper_local",
+    "vosk-model-it-0.22": "vosk",
+}
+_TTS_MODEL_ENGINE = {
+    "piper-it-voice1": "piper",
+}
 
 class Container:
     """
@@ -88,6 +101,15 @@ class Container:
         return self._services["notifications"]
     
     @property
+    def voice_model_manager(self) -> VoiceModelManager:
+        """Ottieni il gestore dei modelli vocali locali (STT/TTS)"""
+        if "voice_model_manager" not in self._services:
+            self._services["voice_model_manager"] = VoiceModelManager(
+                models_dir=str(self.settings.models_dir)
+            )
+        return self._services["voice_model_manager"]
+    
+    @property
     def stt_provider(self) -> Optional[AbstractSTT]:
         """Ottieni provider Speech-to-Text configurato"""
         if "stt_provider" not in self._services:
@@ -119,16 +141,18 @@ class Container:
                 temperature=self.settings.ai_temperature,
                 max_tokens=self.settings.ai_max_tokens
             ),
-            "gemini": lambda: GeminiProvider(
-                api_key=self.settings.gemini_api_key,
-                model=self.settings.ai_model,
-                temperature=self.settings.ai_temperature
-            ),
-            "openrouter": lambda: OpenRouterProvider(
-                api_key=self.settings.openrouter_api_key,
-                model=self.settings.ai_model,
-                temperature=self.settings.ai_temperature
-            ),
+            #TOGLIERE COMMENTO UNA VOTLA IMPLEMENTATO IL MODULO
+            #"gemini": lambda: GeminiProvider(
+            #    api_key=self.settings.gemini_api_key,
+            #    model=self.settings.ai_model,
+            #    temperature=self.settings.ai_temperature
+            #),
+            #TOGLIERE COMMENTO UNA VOTLA IMPLEMENTATO IL MODULO
+            #"openrouter": lambda: OpenRouterProvider(
+            #    api_key=self.settings.openrouter_api_key,
+            #    model=self.settings.ai_model,
+            #    temperature=self.settings.ai_temperature
+            #),
             "ollama": lambda: OllamaProvider(
                 base_url=self.settings.ollama_base_url,
                 model=self.settings.ai_model,
@@ -163,21 +187,54 @@ class Container:
             return YahooFinanceProvider()
     
     def _create_stt_provider(self) -> Optional[AbstractSTT]:
-        """Crea provider STT se configurato"""
-        if self.settings.stt_provider == "disabled":
+        """Crea provider STT se configurato e se il modello è installato"""
+        if not self.settings.stt_enabled or self.settings.stt_provider == "disabled":
             return None
-        
-        # Implementazione futura
-        logger.info(f"STT provider: {self.settings.stt_provider}")
+ 
+        model_name = self.settings.stt_model_name
+        installed = {m.name: m for m in self.voice_model_manager.get_installed_models()}
+        model_info = installed.get(model_name)
+        if model_info is None:
+            logger.warning(f"Modello STT '{model_name}' non installato: STT disabilitato")
+            return None
+ 
+        engine = _STT_MODEL_ENGINE.get(model_name, self.settings.stt_provider)
+        model_file_dir = Path(model_info.installed_path)
+        # Il file scaricato è l'unico file non-json presente nella cartella del modello
+        model_files = [f for f in model_file_dir.iterdir() if f.suffix != ".json"]
+        model_path = str(model_files[0]) if model_files else str(model_file_dir)
+ 
+        logger.info(f"Creazione provider STT '{engine}' con modello '{model_name}'")
+        if engine == "whisper_local":
+            return WhisperLocalSTT(model_path=model_path)
+        elif engine == "vosk":
+            return VoskSTT(model_path=model_path)
+ 
+        logger.warning(f"Motore STT '{engine}' non supportato")
         return None
-    
+ 
     def _create_tts_provider(self) -> Optional[AbstractTTS]:
-        """Crea provider TTS se configurato"""
-        if self.settings.tts_provider == "disabled":
+        """Crea provider TTS se configurato e se il modello è installato"""
+        if not self.settings.tts_enabled or self.settings.tts_provider == "disabled":
             return None
-        
-        # Implementazione futura
-        logger.info(f"TTS provider: {self.settings.tts_provider}")
+ 
+        model_name = self.settings.tts_model_name
+        installed = {m.name: m for m in self.voice_model_manager.get_installed_models()}
+        model_info = installed.get(model_name)
+        if model_info is None:
+            logger.warning(f"Modello TTS '{model_name}' non installato: TTS disabilitato")
+            return None
+ 
+        engine = _TTS_MODEL_ENGINE.get(model_name, self.settings.tts_provider)
+        model_file_dir = Path(model_info.installed_path)
+        model_files = [f for f in model_file_dir.iterdir() if f.suffix != ".json"]
+        model_path = str(model_files[0]) if model_files else str(model_file_dir)
+ 
+        logger.info(f"Creazione provider TTS '{engine}' con modello '{model_name}'")
+        if engine == "piper":
+            return PiperTTS(model_path=model_path)
+ 
+        logger.warning(f"Motore TTS '{engine}' non supportato")
         return None
     
     async def close(self):
