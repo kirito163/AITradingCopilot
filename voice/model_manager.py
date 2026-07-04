@@ -1,4 +1,3 @@
-
 """
 Gestione download, aggiornamento, cancellazione modelli vocali locali
 """
@@ -63,21 +62,31 @@ class VoiceModelManager:
     def _load_installed_models(self):
         """Scansiona la directory modelli e popola lo stato"""
         for model_dir in self.models_dir.iterdir():
-            if model_dir.is_dir():
-                meta_file = model_dir / "model_info.json"
-                if meta_file.exists():
-                    import json
+            if not model_dir.is_dir():
+                continue
+
+            meta_file = model_dir / "model_info.json"
+            if meta_file.exists():
+                import json
+                try:
                     with open(meta_file) as f:
                         info = json.load(f)
                     self._models[model_dir.name] = VoiceModelInfo(**info)
-                else:
-                    # Fallback: deduci dal nome
-                    self._models[model_dir.name] = VoiceModelInfo(
-                        name=model_dir.name,
-                        provider="unknown",
-                        installed=True,
-                        installed_path=str(model_dir)
+                except Exception as e:
+                    logger.warning(
+                        f"model_info.json corrotto o non valido per '{model_dir.name}' "
+                        f"({e}); il modello verrà considerato non installato. "
+                        f"Elimina la cartella '{model_dir}' e riscarica il modello."
                     )
+                    continue
+            else:
+                # Fallback: deduci dal nome
+                self._models[model_dir.name] = VoiceModelInfo(
+                    name=model_dir.name,
+                    provider="unknown",
+                    installed=True,
+                    installed_path=str(model_dir)
+                )
 
     def get_installed_models(self) -> List[VoiceModelInfo]:
         """Restituisce modelli installati"""
@@ -96,21 +105,17 @@ class VoiceModelManager:
             available.append(info)
         return available
 
-    async def download_model(self, model_name: str) -> bool:
+    def download_model(self, model_name: str) -> bool:
         """
-        Scarica un modello dal catalogo
-
-        Args:
-            model_name: Nome modello
-
-        Returns:
-            True se scaricato con successo
+        Scarica un modello dal catalogo (VERSIONE SYNC per Qt)
         """
+
         if model_name not in self._catalog:
             logger.error(f"Modello {model_name} non trovato nel catalogo")
             return False
 
         model_info = self._catalog[model_name]
+
         if not model_info.download_url:
             logger.error(f"Nessun URL di download per {model_name}")
             return False
@@ -123,29 +128,41 @@ class VoiceModelManager:
 
         try:
             logger.info(f"Scaricamento {model_name} ({model_info.size_mb} MB)...")
-            async with httpx.AsyncClient(timeout=3600) as client:
-                async with client.stream("GET", model_info.download_url) as response:
+
+            with httpx.Client(timeout=3600, follow_redirects=True) as client:
+                with client.stream("GET", model_info.download_url) as response:
                     response.raise_for_status()
+
                     with open(target_file, "wb") as f:
-                        async for chunk in response.aiter_bytes(chunk_size=8192):
+                        for chunk in response.iter_bytes(chunk_size=8192):
                             f.write(chunk)
 
-            # Salva metadati
-            import json
+            # salva metadati (scrittura atomica: file temporaneo + rename)
             model_info.installed = True
             model_info.installed_path = str(target_dir)
             model_info.last_updated = datetime.now()
-            with open(target_dir / "model_info.json", "w") as f:
-                json.dump(model_info.dict(), f, indent=2)
+
+            meta_file = target_dir / "model_info.json"
+            tmp_meta_file = target_dir / "model_info.json.tmp"
+            if hasattr(model_info, "model_dump_json"):
+                serialized = model_info.model_dump_json(indent=2)  # Pydantic v2
+            else:
+                serialized = model_info.json(indent=2)  # Pydantic v1
+            with open(tmp_meta_file, "w") as f:
+                f.write(serialized)
+            os.replace(tmp_meta_file, meta_file)
 
             self._models[model_name] = model_info
-            logger.info(f"Modello {model_name} scaricato con successo in {target_dir}")
+
+            logger.info(f"Modello {model_name} scaricato in {target_dir}")
             return True
+
         except Exception as e:
             logger.error(f"Errore download modello {model_name}: {e}")
-            # Pulisci download parziale
+
             if target_file.exists():
                 target_file.unlink()
+
             return False
 
     async def delete_model(self, model_name: str) -> bool:

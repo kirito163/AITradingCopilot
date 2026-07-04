@@ -55,8 +55,12 @@ class Settings(BaseSettings):
     twelve_data_api_key: Optional[str] = None
     
     # Voice Configuration
+    stt_enabled: bool = Field(default=False, description="Abilita riconoscimento vocale")
+    tts_enabled: bool = Field(default=False, description="Abilita sintesi vocale")
     stt_provider: str = Field(default="disabled", description="Speech-to-Text provider")
     tts_provider: str = Field(default="disabled", description="Text-to-Speech provider")
+    stt_model_name: str = Field(default="whisper-base-it", description="Modello STT selezionato dal catalogo")
+    tts_model_name: str = Field(default="piper-it-voice1", description="Modello TTS selezionato dal catalogo")
     whisper_model_size: str = "base"  # tiny, base, small, medium, large
     elevenlabs_api_key: Optional[str] = None
     voice_language: str = "it-IT"
